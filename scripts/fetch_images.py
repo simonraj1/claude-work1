@@ -265,8 +265,10 @@ def main():
             rec[k] = prev.get(k, "")
         path = OUT_DIR / name
 
-        if path.exists():
-            rec["status"] = prev.get("status") or "downloaded"
+        # An image without a recorded PD/CC0 license (e.g. saved after the
+        # last manifest write of an interrupted run) is fetched again.
+        if path.exists() and prev.get("license") and prev.get("source_page"):
+            rec["status"] = "downloaded"
         elif args.dry_run or i >= len(todo):
             rec["status"] = "pending"
         else:
