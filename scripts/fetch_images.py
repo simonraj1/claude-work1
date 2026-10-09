@@ -2,10 +2,12 @@
 """Download one image per row of image-requirements.csv into image/.
 
 Each image is saved as "<question>.jpg" (question text made filesystem-safe).
-Images are searched on Wikimedia Commons (freely licensed) using the row's
-answer, then the keywords in its planned filename. Every result is recorded in
+Images are searched on Wikimedia Commons using what `must_show` says the image
+shows, then the row's answer, then the keywords in its planned filename. Only
+Public Domain and CC0 files are accepted; copyrighted or licensed (CC BY,
+CC BY-SA, ...) and non-free files are skipped. Every result is recorded in
 image/_manifest.csv with its source URL, license and author so it can be
-reviewed and attributed.
+reviewed.
 
 Auto-matched images only approximate `must_show` (arrows, labels and specific
 views are not guaranteed), so review the manifest before using them.
@@ -146,11 +148,22 @@ def queries_for(row):
     return uniq
 
 
+def is_public_domain(meta):
+    """True only for Public Domain or CC0 files; anything else is copyrighted."""
+    value = lambda k: str(meta.get(k, {}).get("value", "")).strip().lower()
+    if value("NonFree") in ("true", "1"):
+        return False
+    code, short = value("License"), value("LicenseShortName")
+    return (code in ("pd", "cc0") or code.startswith("pd-")
+            or "public domain" in short or short.startswith("cc0")
+            or short.startswith("pd"))
+
+
 def search_commons(session, query):
     params = {
         "action": "query", "format": "json", "generator": "search",
         "gsrsearch": f"{query} filetype:bitmap", "gsrnamespace": 6,
-        "gsrlimit": 5, "prop": "imageinfo",
+        "gsrlimit": 25, "prop": "imageinfo",
         "iiprop": "url|mime|extmetadata", "iiurlwidth": 1024,
     }
     resp = session.get(API, params=params, timeout=30)
@@ -161,6 +174,8 @@ def search_commons(session, query):
         if info.get("mime") not in ("image/jpeg", "image/png"):
             continue
         meta = info.get("extmetadata", {})
+        if not is_public_domain(meta):
+            continue
         artist = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", ""))
         return {
             "url": info.get("thumburl") or info["url"],
