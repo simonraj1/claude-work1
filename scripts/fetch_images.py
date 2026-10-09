@@ -173,7 +173,7 @@ def get(session, url, retries=6, **kw):
         if resp.status_code != 429 and resp.status_code < 500:
             break
         wait = resp.headers.get("Retry-After", "")
-        time.sleep(min(int(wait) if wait.isdigit() else 2 ** attempt * 5, 120))
+        time.sleep(min(int(wait) if wait.isdigit() else 2 ** attempt * 5, 600))
     resp.raise_for_status()
     return resp
 
@@ -183,7 +183,7 @@ def search_commons(session, query):
         "action": "query", "format": "json", "generator": "search",
         "gsrsearch": f"{query} filetype:bitmap", "gsrnamespace": 6,
         "gsrlimit": 25, "prop": "imageinfo",
-        "iiprop": "url|mime|extmetadata", "iiurlwidth": 1024,
+        "iiprop": "url|mime|size|extmetadata", "iiurlwidth": 1024,
     }
     resp = get(session, API, params=params, timeout=30)
     pages = resp.json().get("query", {}).get("pages", {})
@@ -194,9 +194,20 @@ def search_commons(session, query):
         meta = info.get("extmetadata", {})
         if not is_public_domain(meta):
             continue
+        url = info.get("thumburl") or info["url"]
+        if "/thumb/" not in url:
+            # Smaller than the requested width, so the API returned the
+            # original; Wikimedia rate-limits those hard, so use a standard
+            # thumbnail size below the original width instead.
+            steps = [w for w in (250, 330, 500, 960) if w < info.get("width", 0)]
+            if not steps:
+                continue
+            base, fname = info["url"].split("?")[0].rsplit("/", 1)
+            url = (base.replace("/commons/", "/commons/thumb/", 1)
+                   + f"/{fname}/{steps[-1]}px-{fname}")
         artist = re.sub(r"<[^>]+>", "", meta.get("Artist", {}).get("value", ""))
         return {
-            "url": info.get("thumburl") or info["url"],
+            "url": url,
             "page": info.get("descriptionurl", ""),
             "license": meta.get("LicenseShortName", {}).get("value", ""),
             "artist": artist.strip(),
