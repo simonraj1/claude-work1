@@ -159,6 +159,25 @@ def is_public_domain(meta):
             or short.startswith("pd"))
 
 
+def get(session, url, retries=6, **kw):
+    """GET that waits out Wikimedia rate limits (429) and transient failures."""
+    import requests
+    for attempt in range(retries):
+        try:
+            resp = session.get(url, **kw)
+        except requests.ConnectionError:
+            if attempt == retries - 1:
+                raise
+            time.sleep(2 ** attempt * 5)
+            continue
+        if resp.status_code != 429 and resp.status_code < 500:
+            break
+        wait = resp.headers.get("Retry-After", "")
+        time.sleep(min(int(wait) if wait.isdigit() else 2 ** attempt * 5, 120))
+    resp.raise_for_status()
+    return resp
+
+
 def search_commons(session, query):
     params = {
         "action": "query", "format": "json", "generator": "search",
@@ -166,8 +185,7 @@ def search_commons(session, query):
         "gsrlimit": 25, "prop": "imageinfo",
         "iiprop": "url|mime|extmetadata", "iiurlwidth": 1024,
     }
-    resp = session.get(API, params=params, timeout=30)
-    resp.raise_for_status()
+    resp = get(session, API, params=params, timeout=30)
     pages = resp.json().get("query", {}).get("pages", {})
     for page in sorted(pages.values(), key=lambda p: p.get("index", 0)):
         info = (page.get("imageinfo") or [{}])[0]
@@ -217,6 +235,12 @@ def main():
         session = requests.Session()
         session.headers["User-Agent"] = USER_AGENT
 
+    def write_manifest(recs):
+        with open(MANIFEST, "w", encoding="utf-8", newline="") as f:
+            w = csv.DictWriter(f, fieldnames=fields)
+            w.writeheader()
+            w.writerows(recs)
+
     fields = ["subject", "row", "priority", "image", "status", "query",
               "source_url", "source_page", "license", "artist", "must_show"]
     results = []
@@ -241,8 +265,7 @@ def main():
                     hit = search_commons(session, q)
                     if not hit:
                         continue
-                    img = session.get(hit["url"], timeout=60)
-                    img.raise_for_status()
+                    img = get(session, hit["url"], timeout=60)
                     save_jpeg(img.content, path)
                 except Exception as e:  # keep going; the manifest records it
                     rec["status"] = f"error: {e}"[:200]
@@ -254,11 +277,12 @@ def main():
             print(f"[{i + 1}/{len(todo)}] {rec['status']:<10} {name}", flush=True)
             time.sleep(args.delay)
         results.append(rec)
+        if i % 20 == 19 and i < len(todo):  # keep metadata if the run dies
+            write_manifest(results + [dict(old.get((r["subject"], r["row"]), {}),
+                                           subject=r["subject"], row=r["row"])
+                                      for r in rows[i + 1:]])
 
-    with open(MANIFEST, "w", encoding="utf-8", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        w.writeheader()
-        w.writerows(results)
+    write_manifest(results)
 
     done = sum(r["status"] == "downloaded" for r in results)
     print(f"{done}/{len(results)} images present; manifest: {MANIFEST}")
