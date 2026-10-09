@@ -227,6 +227,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--limit", type=int)
+    ap.add_argument("--retry-not-found", action="store_true",
+                    help="search again for rows a previous run found nothing for")
     ap.add_argument("--delay", type=float, default=1.0, help="seconds between rows")
     args = ap.parse_args()
 
@@ -269,6 +271,8 @@ def main():
         # last manifest write of an interrupted run) is fetched again.
         if path.exists() and prev.get("license") and prev.get("source_page"):
             rec["status"] = "downloaded"
+        elif prev.get("status") == "not_found" and not args.retry_not_found:
+            rec["status"] = "not_found"
         elif args.dry_run or i >= len(todo):
             rec["status"] = "pending"
         else:
